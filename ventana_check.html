@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ventana Quick-Check</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       max-width:640px;margin:40px auto;padding:0 18px;color:#1f2328;background:#fafbfc}
+  h1{margin-bottom:2px}
+  .sub{color:#57606a;margin-top:0}
+  .note{background:#fff8e6;border:1px solid #f0e0a0;border-radius:8px;padding:12px 14px;
+        font-size:14px;color:#6a5a10;margin:18px 0}
+  ul{list-style:none;padding:0;margin:0}
+  li{display:flex;align-items:center;justify-content:space-between;
+     border-bottom:1px solid #e4e8ec;padding:12px 2px}
+  .wk{font-size:15px}
+  .nights{color:#8c959f;font-size:13px;margin-left:8px}
+  a.btn{background:#0a6cff;color:#fff;text-decoration:none;font-weight:600;font-size:14px;
+        padding:8px 14px;border-radius:8px;white-space:nowrap}
+  a.btn:hover{background:#085ad6}
+  .tip{color:#8c959f;font-size:12px;margin-top:22px;line-height:1.5}
+</style>
+</head>
+<body>
+  <h1>Ventana Quick-Check 🏕</h1>
+  <p class="sub">Tap a weekend → opens the Hyatt booking page in this browser.
+  Look for <b>Campsite 50</b> (your must-have); if <b>49</b> is open the same weekend,
+  grab both for more room &amp; privacy. (Hit SHOW MORE to see all sites.)</p>
+
+  <div class="note">Why manual: Hyatt blocks scripted/headless access, so the only thing
+  that reliably loads is your real browser — which is exactly this. One glance per
+  weekend and you're covered.</div>
+
+  <ul id="list"></ul>
+
+  <p class="tip">Sites only appear here if they're available for those dates, so if you
+  see "Campsite 50" in the list, it's bookable right now. If 49 and 50 are both there,
+  that's the jackpot — book both. Bookmark this page (⌘D) for your 1–2×/day check.</p>
+
+<script>
+  // Your open Fri/Sat weekends. Summer = 3 nights (Ventana's summer minimum), Oct = 2.
+  const WEEKENDS = [
+    ["2026-06-19","2026-06-22"],["2026-06-26","2026-06-29"],["2026-07-17","2026-07-20"],
+    ["2026-08-07","2026-08-10"],["2026-08-28","2026-08-31"],["2026-09-04","2026-09-07"],
+    ["2026-09-11","2026-09-14"],["2026-09-18","2026-09-21"],["2026-09-25","2026-09-28"],
+    ["2026-10-16","2026-10-18"],["2026-10-23","2026-10-25"],["2026-10-30","2026-11-01"]
+  ];
+  const fmt = s => new Date(s+"T00:00:00").toLocaleDateString("en-US",
+    {weekday:"short",month:"short",day:"numeric"});
+  const nights = (a,b) => Math.round((new Date(b)-new Date(a))/864e5);
+  const url = (cin,cout) =>
+    `https://www.hyatt.com/shop/rooms/sjcac?checkinDate=${cin}&checkoutDate=${cout}&rooms=1&adults=2`;
+  const list = document.getElementById("list");
+  for (const [cin,cout] of WEEKENDS){
+    const li=document.createElement("li");
+    li.innerHTML =
+      `<span class="wk">${fmt(cin)} – ${fmt(cout)}<span class="nights">${nights(cin,cout)} nights</span></span>`+
+      `<a class="btn" target="_blank" rel="noopener" href="${url(cin,cout)}">Check on Hyatt →</a>`;
+    list.appendChild(li);
+  }
+</script>
+</body>
+</html>

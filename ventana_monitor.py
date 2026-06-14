@@ -34,7 +34,8 @@ load_dotenv()
 # CONFIG
 # ----------------------------------------------------------------------------
 PROPERTY = "sjcac"                     # Hyatt property code for Ventana Campground
-TARGET_SITES = ["49", "50"]            # sites you want; alert fires if any are bookable
+MUST_HAVE = "50"                       # the site you actually need — alerts fire on this
+PAIR_SITE = "49"                       # bonus: if open the SAME weekend, book both (room/privacy)
 ADULTS = 2
 INTERVAL_MIN = int(os.getenv("VENTANA_INTERVAL_MIN", "60"))
 STATE_FILE = Path(__file__).with_name(".ventana_state.json")
@@ -104,9 +105,8 @@ def fetch_rooms(checkin, checkout):
     return (r.json() or {}).get("roomRates", {}) or {}
 
 
-def open_target_sites(rooms):
-    """Which of TARGET_SITES are present (= bookable) in the roomRates dict."""
-    return [n for n in TARGET_SITES if f"CS{int(n):02d}" in rooms]
+def site_open(rooms, n):
+    return f"CS{int(n):02d}" in rooms
 
 
 def check_range(checkin, checkout, state):
@@ -119,28 +119,38 @@ def check_range(checkin, checkout, state):
         return {"checkin": checkin, "checkout": checkout, "status": "error",
                 "open": [], "url": book_url}
 
-    open_sites = open_target_sites(rooms)
-    print(f"   [debug] sites_available={len(rooms)} targets_open={open_sites}")
+    has_must = site_open(rooms, MUST_HAVE)      # 50 — the trigger
+    has_pair = site_open(rooms, PAIR_SITE)      # 49 — bonus
+    print(f"   [debug] sites_available={len(rooms)} site_50={has_must} site_49={has_pair}")
     key = f"{checkin}:{checkout}"
-    already = set(state.get(key, []))
+    # Alert only on the must-have (50). Track whether we've alerted, and whether
+    # the alert was the "both" jackpot, so a later 49-opening upgrades the alert.
+    prev = state.get(key, "")
 
-    if open_sites:
-        new = [s for s in open_sites if s not in already]
-        if new:
-            sites = ", ".join(open_sites)
-            notify(f"\U0001f3d5 Ventana site {sites} OPEN",
-                   f"Site {sites} bookable {checkin} -> {checkout}. Grab it on Hyatt.",
-                   url=book_url)
-            state[key] = sorted(already | set(open_sites))
+    if has_must:
+        level = "both" if has_pair else "50"
+        if prev != level:                       # new, or upgraded to the jackpot
+            if has_pair:
+                notify("\U0001f3d5\U0001f389 Ventana 49 + 50 BOTH open",
+                       f"Jackpot: sites 49 AND 50 bookable {checkin} -> {checkout}. "
+                       f"Book both for the extra room.", url=book_url)
+            else:
+                notify("\U0001f3d5 Ventana site 50 OPEN",
+                       f"Site 50 bookable {checkin} -> {checkout}. Grab it on Hyatt "
+                       f"(49 not open this weekend).", url=book_url)
+            state[key] = level
             save_state(state)
         else:
-            print(f"   still open ({open_sites}) — already alerted")
-        status = "OPEN"
+            print(f"   50 still open ({level}) — already alerted")
+        status = "OPEN: 49 + 50" if has_pair else "OPEN: 50"
+        open_sites = (["49", "50"] if has_pair else ["50"])
     else:
         if key in state:
             state.pop(key); save_state(state)
-        status = "sold out" if not rooms else "no 49/50"
-        print(f"   {status} ({len(rooms)} other sites)")
+        status = "sold out" if not rooms else "no 50"
+        open_sites = []
+        note = " (49 open, but no 50)" if has_pair else f" ({len(rooms)} other sites)"
+        print(f"   {status}{note}")
 
     return {"checkin": checkin, "checkout": checkout, "status": status,
             "open": open_sites, "url": book_url, "total": len(rooms)}
@@ -149,25 +159,23 @@ def check_range(checkin, checkout, state):
 # ----------------------------------------------------------------------------
 def write_dashboard(results):
     now = dt.datetime.now().strftime("%a %b %-d, %Y %-I:%M %p")
-    colors = {"OPEN": "#1a7f37", "no 49/50": "#57606a",
-              "sold out": "#8c5800", "error": "#cf222e"}
     rows = ""
     any_open = False
     for r in sorted(results, key=lambda x: x["checkin"]):
-        c = colors.get(r["status"], "#57606a")
-        if r["status"] == "OPEN":
+        if r["status"].startswith("OPEN"):       # 50 is bookable
             any_open = True
-            label = "OPEN: " + ", ".join(r["open"])
             cell = (f'<a href="{html.escape(r["url"])}" '
-                    f'style="color:#1a7f37;font-weight:700">{label} &rarr; book</a>')
+                    f'style="color:#1a7f37;font-weight:700">{html.escape(r["status"])} &rarr; book</a>')
         else:
-            extra = f' ({r.get("total", 0)} other sites)' if r["status"] == "no 49/50" else ""
-            cell = f'<span style="color:{c}">{html.escape(r["status"] + extra)}</span>'
+            color = ("#8c5800" if r["status"] == "sold out"
+                     else "#cf222e" if r["status"] == "error" else "#57606a")
+            extra = f' ({r.get("total", 0)} other sites)' if r["status"] == "no 50" else ""
+            cell = f'<span style="color:{color}">{html.escape(r["status"] + extra)}</span>'
         rows += (f'<tr><td>{r["checkin"]} &rarr; {r["checkout"]}</td>'
                  f'<td style="text-align:right">{cell}</td></tr>')
 
-    banner = ("\U0001f3d5 A target site is OPEN — see the green row below."
-              if any_open else "No target sites (49/50) open right now.")
+    banner = ("\U0001f3d5 Site 50 is OPEN — see the green row below."
+              if any_open else "Site 50 not open on any weekend right now.")
     doc = f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ventana Camp Watcher</title></head>
