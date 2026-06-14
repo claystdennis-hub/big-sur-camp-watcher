@@ -31,8 +31,8 @@ account for you — you'll do this part.)
 - Repo → **Settings** → **Secrets and variables** → **Actions** → **New
   repository secret**.
 - Add two secrets:
-  - Name `PUSHOVER_PUSH_TOKEN`, value `a1fts4axtbdc11g17udd58kqh3kksv`
-  - Name `PUSHOVER_PUSH_USER`,  value `uvqhtgkwn78hqdgbgneevvog5xv83i`
+  - Name `PUSHOVER_PUSH_TOKEN`, value `<paste your Pushover API token>`
+  - Name `PUSHOVER_PUSH_USER`,  value `<paste your Pushover user key>`
 - These are encrypted and never visible in logs or to the public.
 
 ## 5. Turn it on and test
