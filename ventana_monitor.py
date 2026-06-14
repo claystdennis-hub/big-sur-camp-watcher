@@ -167,6 +167,14 @@ def check_range(checkin, checkout, state):
 
     unavailable = ("/search/" in final_url) or any(m in text.lower() for m in UNAVAILABLE_MARKERS)
     open_sites = find_open_sites(text)
+
+    # --- diagnostics: shows what the headless browser actually rendered ---
+    _hdr = re.search(r"ROOMS\s*\((\d+)\)", text)
+    print(f"   [debug] search_redirect={'/search/' in final_url} "
+          f"rooms_header={_hdr.group(1) if _hdr else 'none'} "
+          f"campsite_tokens={len(re.findall(r'Campsite', text))} "
+          f"show_more_remaining={'SHOW MORE' in text} body_len={len(text)}")
+
     key = f"{checkin}:{checkout}"
     already = set(state.get(key, []))
 
