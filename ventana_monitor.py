@@ -118,16 +118,33 @@ def fetch_listing(checkin, checkout):
         page.goto(url, wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(3500)
 
+        # Dismiss the cookie/consent banner first — otherwise it intercepts the
+        # "SHOW MORE" click and we only ever see the first 8 sites (so 49/50,
+        # which load in a later batch, are never found).
+        for sel in ("#onetrust-reject-all-handler", "#onetrust-accept-btn-handler",
+                    "button:has-text('Reject')", "button:has-text('Accept')"):
+            try:
+                b = page.locator(sel).first
+                if b.is_visible(timeout=1000):
+                    b.click(timeout=2000)
+                    page.wait_for_timeout(800)
+                    break
+            except Exception:
+                pass
+
         # If Hyatt bounced us to the search page, the dates are unavailable.
         if "/search/" not in page.url:
             # Expand the full site list: click "SHOW MORE" until it's gone.
-            for _ in range(20):
+            for _ in range(30):
                 try:
-                    btn = page.get_by_text("SHOW MORE", exact=False)
+                    btn = page.get_by_role("button", name="SHOW MORE")
+                    if btn.count() == 0:
+                        btn = page.get_by_text("SHOW MORE", exact=False)
                     if btn.count() == 0 or not btn.first.is_visible():
                         break
-                    btn.first.click()
-                    page.wait_for_timeout(1200)
+                    btn.first.scroll_into_view_if_needed(timeout=3000)
+                    btn.first.click(timeout=3000)
+                    page.wait_for_timeout(1500)
                 except Exception:
                     break
 
