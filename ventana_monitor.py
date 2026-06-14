@@ -4,23 +4,18 @@ Ventana Campground (Hyatt property SJCAC) availability monitor.
 
 Ventana isn't on Recreation.gov or ReserveCalifornia, so camply can't see it —
 it's sold through Hyatt. This script drives a headless browser to the Hyatt
-booking page for the dates you want, expands the full site list, and pushes a
-Pushover alert if your target sites (49 / 50) are bookable.
+booking page for the dates you want, expands the full site list, pushes a
+Pushover alert if your target sites (49 / 50) are bookable, and writes a local
+dashboard.html you can double-click to see the latest status.
 
-VERIFIED against the live page (2026 dates):
-  * Booking URL:  https://www.hyatt.com/shop/rooms/sjcac?checkinDate=YYYY-MM-DD&checkoutDate=YYYY-MM-DD&rooms=1&adults=2
-  * Site labels:  "Campsite 49", "Campsite 50" (single digits are zero-padded,
-                  e.g. "Campsite 02"; hike-in sites read "Hike-in Campsite 01").
-  * The page lists ONLY bookable sites, 8 at a time behind a "SHOW MORE" button,
-    so we must expand the list before scanning.
-  * Sold-out / unavailable dates redirect to a /search/ page with a
-    "not available during those dates" banner.
+IMPORTANT: run this from a residential connection (your Mac). Hyatt serves an
+empty page to datacenter IPs (e.g. GitHub Actions), so cloud runs don't work.
 
 Setup:
-  pip install playwright requests python-dotenv
+  pip install -r requirements.txt
   playwright install chromium
 Run:
-  python ventana_monitor.py once     # single pass
+  python ventana_monitor.py once     # single pass (what the 8am/6pm job uses)
   python ventana_monitor.py watch    # loop every INTERVAL_MIN minutes
 """
 
@@ -29,6 +24,7 @@ import re
 import sys
 import json
 import time
+import html
 import datetime as dt
 from pathlib import Path
 
@@ -41,27 +37,28 @@ load_dotenv()
 # ----------------------------------------------------------------------------
 # CONFIG
 # ----------------------------------------------------------------------------
-PROPERTY = "sjcac"                      # Hyatt property code for Ventana Campground
+PROPERTY = "sjcac"                     # Hyatt property code for Ventana Campground
 TARGET_SITES = ["49", "50"]            # sites you want; alert fires if any are bookable
 ALERT_ON_ANY_SITE = False              # True = also alert when ANY site is open
 ADULTS = 2
 INTERVAL_MIN = int(os.getenv("VENTANA_INTERVAL_MIN", "20"))
-STATE_FILE = Path(__file__).with_name(".ventana_state.json")  # dedupe repeat alerts
+STATE_FILE = Path(__file__).with_name(".ventana_state.json")     # dedupe repeat alerts
+DASHBOARD_FILE = Path(__file__).with_name("dashboard.html")      # glance-able status page
 
 # Date ranges to check, each (checkin, checkout) as YYYY-MM-DD.
 # Built from Clay's OPEN Fri/Sat weekends (calendar conflicts excluded).
-# Summer/early-fall use Fri->Mon (3 nights) because Ventana enforces a 3-night
-# minimum in peak season; October uses Fri->Sun (2 nights, off-season).
+# Summer/early-fall use Fri->Mon (3 nights) for Ventana's 3-night summer minimum;
+# October uses Fri->Sun (2 nights, off-season).
 DATE_RANGES = [
-    ("2026-06-19", "2026-06-22"),      # Fri -> Mon
+    ("2026-06-19", "2026-06-22"),
     ("2026-06-26", "2026-06-29"),
     ("2026-07-17", "2026-07-20"),
     ("2026-08-07", "2026-08-10"),
     ("2026-08-28", "2026-08-31"),
-    ("2026-09-04", "2026-09-07"),      # Labor Day wknd (you have golf Mon 9/7 — trim if needed)
+    ("2026-09-04", "2026-09-07"),      # Labor Day wknd (golf Mon 9/7 — trim if needed)
     ("2026-09-11", "2026-09-14"),
     ("2026-09-18", "2026-09-21"),
-    ("2026-09-25", "2026-09-28"),      # your tentative Big Sur weekend — site 49 was OPEN on last check
+    ("2026-09-25", "2026-09-28"),      # your tentative Big Sur weekend
     ("2026-10-16", "2026-10-18"),      # Fri -> Sun (off-season, 2 nights)
     ("2026-10-23", "2026-10-25"),
     ("2026-10-30", "2026-11-01"),
@@ -72,10 +69,12 @@ BOOKING_URL = (
     "?checkinDate={cin}&checkoutDate={cout}&rooms=1&adults={adults}"
 )
 
-# Matches "Campsite 49", "Campsite 049", "Hike-in Campsite 49" (zero-pad tolerant).
+
 def site_pattern(n):
+    """Matches 'Campsite 49', 'Campsite 049', 'Hike-in Campsite 49' (zero-pad tolerant)."""
     return re.compile(r"(?:Hike-?in\s+)?Campsite\s*0*" + re.escape(str(int(n))) + r"\b",
                       re.IGNORECASE)
+
 
 UNAVAILABLE_MARKERS = ["not available during those dates", "no rooms available",
                        "sold out", "no availability"]
@@ -158,23 +157,19 @@ def find_open_sites(text):
 
 
 def check_range(checkin, checkout, state):
+    """Check one date range; alert if needed; return a dashboard result dict."""
     print(f">> {dt.datetime.now():%F %T}  Ventana {checkin} -> {checkout}")
+    book_url = BOOKING_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
     try:
         final_url, text = fetch_listing(checkin, checkout)
     except Exception as e:
         print(f"   error loading page: {e}")
-        return
+        return {"checkin": checkin, "checkout": checkout, "status": "error",
+                "open": [], "url": book_url}
 
     unavailable = ("/search/" in final_url) or any(m in text.lower() for m in UNAVAILABLE_MARKERS)
     open_sites = find_open_sites(text)
-
-    # --- diagnostics: shows what the headless browser actually rendered ---
-    _hdr = re.search(r"ROOMS\s*\((\d+)\)", text)
-    print(f"   [debug] search_redirect={'/search/' in final_url} "
-          f"rooms_header={_hdr.group(1) if _hdr else 'none'} "
-          f"campsite_tokens={len(re.findall(r'Campsite', text))} "
-          f"show_more_remaining={'SHOW MORE' in text} body_len={len(text)}")
-
+    campsite_tokens = len(re.findall(r"Campsite", text))
     key = f"{checkin}:{checkout}"
     already = set(state.get(key, []))
 
@@ -182,7 +177,6 @@ def check_range(checkin, checkout, state):
         new = [s for s in open_sites if s not in already]
         if new:
             sites = ", ".join(open_sites)
-            book_url = BOOKING_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
             notify(f"\U0001f3d5 Ventana site {sites} OPEN",
                    f"Site {sites} bookable {checkin} -> {checkout}. Grab it on Hyatt.",
                    url=book_url)
@@ -190,16 +184,68 @@ def check_range(checkin, checkout, state):
             save_state(state)
         else:
             print(f"   still open ({open_sites}) — already alerted")
+        status = "OPEN"
     else:
-        print("   targets not available" + (" (dates sold out)" if unavailable else ""))
         if key in state:                     # reset so a reopen re-alerts
             state.pop(key); save_state(state)
+        if unavailable:
+            status = "sold out"
+        elif campsite_tokens == 0:
+            status = "no data"               # page didn't render (block / network)
+        else:
+            status = "no 49/50"              # sites exist for these dates, just not yours
+        print(f"   {status}")
+
+    return {"checkin": checkin, "checkout": checkout, "status": status,
+            "open": open_sites, "url": book_url}
+
+
+# ----------------------------------------------------------------------------
+def write_dashboard(results):
+    """Write a self-contained dashboard.html summarizing the latest run."""
+    now = dt.datetime.now().strftime("%a %b %-d, %Y %-I:%M %p")
+    colors = {"OPEN": "#1a7f37", "no 49/50": "#57606a", "sold out": "#8c5800",
+              "no data": "#cf222e", "error": "#cf222e"}
+    rows = ""
+    any_open = False
+    for r in sorted(results, key=lambda x: x["checkin"]):
+        c = colors.get(r["status"], "#57606a")
+        label = r["status"]
+        if r["status"] == "OPEN":
+            any_open = True
+            label = "OPEN: " + ", ".join(r["open"])
+            cell = f'<a href="{html.escape(r["url"])}" style="color:#1a7f37;font-weight:700">{label} &rarr; book</a>'
+        else:
+            cell = f'<span style="color:{c}">{html.escape(label)}</span>'
+        rows += (f'<tr><td>{r["checkin"]} &rarr; {r["checkout"]}</td>'
+                 f'<td style="text-align:right">{cell}</td></tr>')
+
+    banner = ("\U0001f3d5 A target site is OPEN — check the green row below."
+              if any_open else "No target sites (49/50) open right now.")
+    doc = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ventana Camp Watcher</title></head>
+<body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:620px;
+margin:40px auto;padding:0 16px;color:#1f2328">
+<h1 style="margin-bottom:4px">Ventana Camp Watcher</h1>
+<p style="color:#57606a;margin-top:0">Sites 49 &amp; 50 &middot; last checked {now}</p>
+<p style="font-size:18px;font-weight:600">{banner}</p>
+<table style="width:100%;border-collapse:collapse;font-size:15px">
+<thead><tr style="border-bottom:2px solid #d0d7de;text-align:left">
+<th style="padding:8px 0">Weekend</th><th style="padding:8px 0;text-align:right">Status</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<p style="color:#8c959f;font-size:12px;margin-top:24px">
+Auto-generated by ventana_monitor.py. Refresh this page after the next run (8am / 6pm).
+You also get a Pushover alert the moment a site opens.</p>
+</body></html>"""
+    DASHBOARD_FILE.write_text(doc)
+    print(f"   dashboard -> {DASHBOARD_FILE}")
 
 
 def run_once():
     state = load_state()
-    for cin, cout in DATE_RANGES:
-        check_range(cin, cout, state)
+    results = [check_range(c, o, state) for c, o in DATE_RANGES]
+    write_dashboard(results)
 
 
 def main():

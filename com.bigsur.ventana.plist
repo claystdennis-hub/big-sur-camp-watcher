@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bigsur.ventana</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /Users/claystdennis/big-sur-camp-watcher &amp;&amp; ./.venv/bin/python ventana_monitor.py once &gt;&gt; ventana.log 2&gt;&amp;1</string>
+  </array>
+
+  <!-- Runs at 8:00 AM and 6:00 PM daily. If the Mac is asleep, launchd runs it on wake. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Users/claystdennis/big-sur-camp-watcher/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/claystdennis/big-sur-camp-watcher/launchd.err.log</string>
+</dict>
+</plist>
