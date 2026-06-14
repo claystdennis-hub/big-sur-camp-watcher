@@ -1,0 +1,30 @@
+name: big-sur-camp-watcher
+
+# Free 24/7 hosting: GitHub runs this on a schedule, no server to maintain.
+# Each run polls both providers once. Best for sniping CANCELLATIONS.
+# (For the 8AM 6-months-out drop, run ./scan.sh watch locally instead —
+#  Actions cron is delayed under load and isn't fast enough to win that race.)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 min
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install camply
+      - name: Scan
+        env:
+          PUSHOVER_PUSH_TOKEN: ${{ secrets.PUSHOVER_PUSH_TOKEN }}
+          PUSHOVER_PUSH_USER:  ${{ secrets.PUSHOVER_PUSH_USER }}
+          CAMPLY_NOTIFICATIONS: Pushover
+        run: |
+          chmod +x scan.sh
+          ./scan.sh once
