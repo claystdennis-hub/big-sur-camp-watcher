@@ -1,0 +1,30 @@
+name: ventana-monitor
+
+# Watches Ventana Campground (Hyatt SJCAC) for sites 49/50 on your open weekends.
+# Heavier than the camply scan (drives a headless browser), so it runs less often.
+# Free on a PUBLIC repo (unlimited Actions minutes); on a private repo it draws
+# from your 2,000 free min/month.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min
+  workflow_dispatch: {}
+
+jobs:
+  ventana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps + browser
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Check Ventana
+        env:
+          PUSHOVER_PUSH_TOKEN: ${{ secrets.PUSHOVER_PUSH_TOKEN }}
+          PUSHOVER_PUSH_USER:  ${{ secrets.PUSHOVER_PUSH_USER }}
+        run: python ventana_monitor.py once
