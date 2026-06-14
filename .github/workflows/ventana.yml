@@ -22,6 +22,9 @@ jobs:
       - name: Install deps + browser
         run: |
           pip install -r requirements.txt
+          # GitHub runner images ship broken Microsoft apt repos that 403 on
+          # apt-get update; remove them so --with-deps can install browser libs.
+          sudo rm -f /etc/apt/sources.list.d/*microsoft* /etc/apt/sources.list.d/*azure* || true
           python -m playwright install --with-deps chromium
       - name: Check Ventana
         env:
