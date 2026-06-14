@@ -1,0 +1,6 @@
+# Never commit secrets or local cruft
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

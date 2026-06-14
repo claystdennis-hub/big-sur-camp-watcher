@@ -1,0 +1,29 @@
+# =============================================================================
+# Big Sur Camp Watcher — camply search config (Clay's priority targets)
+# Edit dates/nights, then run ./scan.sh once  (or ./scan.sh watch)
+# =============================================================================
+
+# ---- Trip parameters (EDIT THESE) -------------------------------------------
+start_date: "2026-08-14"     # first night
+end_date:   "2026-08-17"     # checkout morning
+nights: 2                    # consecutive nights required at one site
+# weekends: true             # uncomment to only match Fri/Sat nights
+
+# ---- Recreation.gov (federal) -----------------------------------------------
+recreation_dot_gov:
+  campgrounds:
+    - 233116   # Kirk Creek  (oceanfront bluff — your sites 9, 11, 22, 5, 8)
+    # - 231959 # Plaskett Creek (lower priority — RV-tolerant; uncomment if wanted)
+
+# ---- ReserveCalifornia (state) ----------------------------------------------
+# Your priority RC parks. Need their rec-area IDs first — run these locally
+# AFTER `pip install camply`, then paste the numbers in below:
+#   camply recreation-areas --provider ReserveCalifornia --search "Julia Pfeiffer Burns"
+#   camply recreation-areas --provider ReserveCalifornia --search "Andrew Molera"
+#   camply recreation-areas --provider ReserveCalifornia --search "Limekiln"
+reserve_california:
+  rec_areas:
+    # - <id>   # Julia Pfeiffer Burns SP  (2 hike-in env sites — top match)
+    # - <id>   # Andrew Molera SP         (hike-in trail camp)
+    # - <id>   # Limekiln SP              (redwood sites 13-29)
+    # - 690    # Pfeiffer Big Sur SP      (lower priority — big/busy; uncomment if wanted)

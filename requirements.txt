@@ -1,0 +1,7 @@
+# Government-site monitor (Kirk Creek, JP Burns, Molera, Limekiln)
+camply
+
+# Ventana (Hyatt SJCAC) monitor
+playwright
+requests
+python-dotenv
