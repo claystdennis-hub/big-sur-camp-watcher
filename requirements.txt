@@ -1,7 +1,7 @@
-# Government-site monitor (Kirk Creek, JP Burns, Molera, Limekiln)
-camply
-
-# Ventana (Hyatt SJCAC) monitor
-playwright
+# Ventana (Hyatt SJCAC) monitor — runs on your Mac. Hits Hyatt's JSON API
+# directly, so no browser is needed.
 requests
 python-dotenv
+
+# (The camply government-site scans run in GitHub Actions, which installs camply
+#  on its own — you don't need it locally.)
