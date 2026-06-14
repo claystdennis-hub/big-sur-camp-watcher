@@ -102,18 +102,24 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state))
 
 
-def fetch_listing(checkin, checkout):
-    """Render the booking page, expand all sites, return (final_url, body_text)."""
+def make_browser(p):
+    """Launch a VISIBLE browser using real Chrome if available. Hyatt serves a
+    blank page to headless Chromium, so headed + the system Chrome channel is
+    what actually renders the site list."""
+    args = ["--disable-blink-features=AutomationControlled"]
+    try:
+        return p.chromium.launch(headless=False, channel="chrome", args=args)
+    except Exception:
+        # Fall back to Playwright's bundled Chromium (still headed).
+        return p.chromium.launch(headless=False, args=args)
+
+
+def fetch_listing(ctx, checkin, checkout):
+    """Render the booking page in the given context; expand all sites; return
+    (final_url, body_text)."""
     url = BOOKING_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(
-            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0 Safari/537.36"),
-            viewport={"width": 1280, "height": 1800},
-        )
-        page = ctx.new_page()
+    page = ctx.new_page()
+    try:
         page.goto(url, wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(3500)
 
@@ -147,21 +153,21 @@ def fetch_listing(checkin, checkout):
                 except Exception:
                     break
 
-        final_url, text = page.url, page.inner_text("body")
-        browser.close()
-        return final_url, text
+        return page.url, page.inner_text("body")
+    finally:
+        page.close()
 
 
 def find_open_sites(text):
     return [n for n in TARGET_SITES if site_pattern(n).search(text)]
 
 
-def check_range(checkin, checkout, state):
+def check_range(ctx, checkin, checkout, state):
     """Check one date range; alert if needed; return a dashboard result dict."""
     print(f">> {dt.datetime.now():%F %T}  Ventana {checkin} -> {checkout}")
     book_url = BOOKING_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
     try:
-        final_url, text = fetch_listing(checkin, checkout)
+        final_url, text = fetch_listing(ctx, checkin, checkout)
     except Exception as e:
         print(f"   error loading page: {e}")
         return {"checkin": checkin, "checkout": checkout, "status": "error",
@@ -170,6 +176,8 @@ def check_range(checkin, checkout, state):
     unavailable = ("/search/" in final_url) or any(m in text.lower() for m in UNAVAILABLE_MARKERS)
     open_sites = find_open_sites(text)
     campsite_tokens = len(re.findall(r"Campsite", text))
+    print(f"   [debug] campsite_tokens={campsite_tokens} "
+          f"search_redirect={'/search/' in final_url} body_len={len(text)}")
     key = f"{checkin}:{checkout}"
     already = set(state.get(key, []))
 
@@ -244,7 +252,20 @@ You also get a Pushover alert the moment a site opens.</p>
 
 def run_once():
     state = load_state()
-    results = [check_range(c, o, state) for c, o in DATE_RANGES]
+    results = []
+    with sync_playwright() as p:
+        browser = make_browser(p)
+        ctx = browser.new_context(
+            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0 Safari/537.36"),
+            viewport={"width": 1280, "height": 1800},
+        )
+        try:
+            for c, o in DATE_RANGES:
+                results.append(check_range(ctx, c, o, state))
+        finally:
+            browser.close()
     write_dashboard(results)
 
 
