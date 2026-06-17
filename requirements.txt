@@ -1,7 +1,9 @@
-# Ventana (Hyatt SJCAC) monitor — runs on your Mac. Hits Hyatt's JSON API
-# directly, so no browser is needed.
+# Ventana (Hyatt SJCAC) monitor — runs on your Mac.
+# Hyatt uses Kasada anti-bot, which blocks headless browsers and cold requests,
+# so we drive a real (off-screen) browser and intercept its API response.
+playwright
 requests
 python-dotenv
 
-# (The camply government-site scans run in GitHub Actions, which installs camply
-#  on its own — you don't need it locally.)
+# After installing: playwright install chromium
+# (The camply government-site scans run in GitHub Actions and install camply there.)

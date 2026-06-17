@@ -2,18 +2,18 @@
 """
 Ventana Campground (Hyatt property SJCAC) availability monitor.
 
-Ventana isn't on Recreation.gov or ReserveCalifornia, so camply can't see it.
-This hits Hyatt's room-rates JSON API directly (no browser) and pushes a Pushover
-alert when your target sites (49 / 50) are bookable. It also writes dashboard.html.
+Hyatt guards its booking API with Kasada anti-bot protection, which blocks
+headless browsers AND cold script requests (403). The method that gets through
+(confirmed working): launch a REAL, visible browser, let the booking page run
+Kasada's JS and make its own availability call, and intercept that response.
+We then check the JSON for site 50 (the trigger) and 49 (bonus), alert via
+Pushover, and write dashboard.html.
 
-How it works: Hyatt's booking page calls
-  /en-US/shop/service/rooms/roomrates/<prop>?...&checkinDate=...&checkoutDate=...
-which returns {"roomRates": {"CS49": {...}, "CS50": {...}, ...}} listing ONLY the
-sites available for those dates. Site N appears as key "CS<NN>" (zero-padded).
-A plain GET with a browser-like User-Agent is enough — fast, quiet, reliable.
+To avoid hijacking your screen, the browser window is launched OFF-SCREEN. It
+only runs ~1-2 min, twice a day (8am/6pm via launchd).
 
-Setup:  pip install requests python-dotenv
-Run:    python ventana_monitor.py once     # single pass (the 8am/6pm job uses this)
+Setup:  pip install playwright requests python-dotenv && playwright install chromium
+Run:    python ventana_monitor.py once     # single pass (what the schedule uses)
         python ventana_monitor.py watch     # loop every INTERVAL_MIN minutes
 """
 
@@ -27,22 +27,29 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
 # ----------------------------------------------------------------------------
 # CONFIG
 # ----------------------------------------------------------------------------
-PROPERTY = "sjcac"                     # Hyatt property code for Ventana Campground
-MUST_HAVE = "50"                       # the site you actually need — alerts fire on this
-PAIR_SITE = "49"                       # bonus: if open the SAME weekend, book both (room/privacy)
+PROPERTY = "sjcac"
+MUST_HAVE = "50"                       # site 50 — alerts fire on this
+PAIR_SITE = "49"                       # bonus: if open the SAME weekend, book both
 ADULTS = 2
 INTERVAL_MIN = int(os.getenv("VENTANA_INTERVAL_MIN", "60"))
 STATE_FILE = Path(__file__).with_name(".ventana_state.json")
 DASHBOARD_FILE = Path(__file__).with_name("dashboard.html")
 
-# Your OPEN Fri/Sat weekends (calendar conflicts excluded). Summer/early-fall use
-# Fri->Mon (3 nights) for Ventana's 3-night summer minimum; October Fri->Sun.
+# Kasada blocks headless — the window MUST be visible. We shove it off-screen so
+# it doesn't steal focus. If your Mac clamps the position and it still shows,
+# delete the --window-position arg.
+LAUNCH_ARGS = ["--window-position=-3000,-3000", "--window-size=1200,850"]
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+# Your open Fri/Sat weekends. Summer = 3 nights (Ventana's summer minimum), Oct = 2.
 DATE_RANGES = [
     ("2026-06-19", "2026-06-22"),
     ("2026-06-26", "2026-06-29"),
@@ -52,25 +59,14 @@ DATE_RANGES = [
     ("2026-09-04", "2026-09-07"),      # Labor Day wknd (golf Mon 9/7 — trim if needed)
     ("2026-09-11", "2026-09-14"),
     ("2026-09-18", "2026-09-21"),
-    ("2026-09-25", "2026-09-28"),      # your tentative Big Sur weekend
-    ("2026-10-16", "2026-10-18"),      # Fri -> Sun (off-season, 2 nights)
+    ("2026-09-25", "2026-09-28"),
+    ("2026-10-16", "2026-10-18"),      # off-season, 2 nights
     ("2026-10-23", "2026-10-25"),
     ("2026-10-30", "2026-11-01"),
 ]
 
-API_URL = ("https://www.hyatt.com/en-US/shop/service/rooms/roomrates/{prop}"
-           "?spiritCode={prop}&rooms=1&adults={adults}"
-           "&checkinDate={cin}&checkoutDate={cout}&kids=0&suiteUpgrade=true")
-BOOKING_URL = ("https://www.hyatt.com/shop/rooms/{prop}"
-               "?checkinDate={cin}&checkoutDate={cout}&rooms=1&adults={adults}")
-
-HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/124.0 Safari/537.36"),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+SHOP_URL = ("https://www.hyatt.com/shop/rooms/{prop}"
+            "?checkinDate={cin}&checkoutDate={cout}&rooms=1&adults={adults}")
 
 
 # ----------------------------------------------------------------------------
@@ -95,65 +91,81 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state))
 
 
-def fetch_rooms(checkin, checkout):
-    """Return Hyatt's roomRates dict for these dates (keys like 'CS49'). Empty
-    dict means sold out / nothing available; None means the request failed."""
-    url = API_URL.format(prop=PROPERTY, adults=ADULTS, cin=checkin, cout=checkout)
-    referer = BOOKING_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
-    r = requests.get(url, headers={**HEADERS, "Referer": referer}, timeout=30)
-    r.raise_for_status()
-    return (r.json() or {}).get("roomRates", {}) or {}
-
-
-def site_open(rooms, n):
-    return f"CS{int(n):02d}" in rooms
-
-
-def check_range(checkin, checkout, state):
-    print(f">> {dt.datetime.now():%F %T}  Ventana {checkin} -> {checkout}")
-    book_url = BOOKING_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
-    try:
-        rooms = fetch_rooms(checkin, checkout)
-    except Exception as e:
-        print(f"   request failed: {e}")
-        return {"checkin": checkin, "checkout": checkout, "status": "error",
-                "open": [], "url": book_url}
-
-    has_must = site_open(rooms, MUST_HAVE)      # 50 — the trigger
-    has_pair = site_open(rooms, PAIR_SITE)      # 49 — bonus
-    print(f"   [debug] sites_available={len(rooms)} site_50={has_must} site_49={has_pair}")
+def evaluate(rooms, checkin, checkout, state):
+    """rooms = roomRates dict, or None if the page never returned data."""
+    book_url = SHOP_URL.format(prop=PROPERTY, cin=checkin, cout=checkout, adults=ADULTS)
     key = f"{checkin}:{checkout}"
-    # Alert only on the must-have (50). Track whether we've alerted, and whether
-    # the alert was the "both" jackpot, so a later 49-opening upgrades the alert.
-    prev = state.get(key, "")
 
-    if has_must:
-        level = "both" if has_pair else "50"
-        if prev != level:                       # new, or upgraded to the jackpot
-            if has_pair:
+    if rooms is None:                       # interception got nothing (block/timeout)
+        print("   no data (page didn't return availability)")
+        return {"checkin": checkin, "checkout": checkout, "status": "no data",
+                "open": [], "url": book_url, "total": 0}
+
+    has50 = f"CS{int(MUST_HAVE):02d}" in rooms
+    has49 = f"CS{int(PAIR_SITE):02d}" in rooms
+    print(f"   sites_available={len(rooms)} site_50={has50} site_49={has49}")
+
+    if has50:
+        level = "both" if has49 else "50"
+        if state.get(key) != level:
+            if has49:
                 notify("\U0001f3d5\U0001f389 Ventana 49 + 50 BOTH open",
-                       f"Jackpot: sites 49 AND 50 bookable {checkin} -> {checkout}. "
-                       f"Book both for the extra room.", url=book_url)
+                       f"Jackpot: 49 AND 50 bookable {checkin} -> {checkout}. Book both.",
+                       url=book_url)
             else:
                 notify("\U0001f3d5 Ventana site 50 OPEN",
-                       f"Site 50 bookable {checkin} -> {checkout}. Grab it on Hyatt "
-                       f"(49 not open this weekend).", url=book_url)
+                       f"Site 50 bookable {checkin} -> {checkout} (49 not open). Grab it.",
+                       url=book_url)
             state[key] = level
             save_state(state)
         else:
             print(f"   50 still open ({level}) — already alerted")
-        status = "OPEN: 49 + 50" if has_pair else "OPEN: 50"
-        open_sites = (["49", "50"] if has_pair else ["50"])
+        status = "OPEN: 49 + 50" if has49 else "OPEN: 50"
+        open_sites = ["49", "50"] if has49 else ["50"]
     else:
         if key in state:
             state.pop(key); save_state(state)
         status = "sold out" if not rooms else "no 50"
         open_sites = []
-        note = " (49 open, but no 50)" if has_pair else f" ({len(rooms)} other sites)"
-        print(f"   {status}{note}")
 
     return {"checkin": checkin, "checkout": checkout, "status": status,
             "open": open_sites, "url": book_url, "total": len(rooms)}
+
+
+def run_once():
+    state = load_state()
+    results = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, args=LAUNCH_ARGS)
+        ctx = browser.new_context(viewport={"width": 1200, "height": 850}, user_agent=UA)
+        page = ctx.new_page()
+
+        captured = {"data": None}
+        def on_response(resp):
+            try:
+                if f"roomrates/{PROPERTY}" in resp.url and resp.status == 200:
+                    captured["data"] = resp.json()
+            except Exception:
+                pass
+        page.on("response", on_response)
+
+        for cin, cout in DATE_RANGES:
+            print(f">> {dt.datetime.now():%F %T}  Ventana {cin} -> {cout}")
+            captured["data"] = None
+            url = SHOP_URL.format(prop=PROPERTY, cin=cin, cout=cout, adults=ADULTS)
+            try:
+                page.goto(url, wait_until="load", timeout=45000)
+                page.wait_for_timeout(4500)        # let the page fire its availability call
+            except Exception as e:
+                print(f"   load failed: {e}")
+                results.append(evaluate(None, cin, cout, state))
+                continue
+            data = captured["data"]
+            rooms = (data or {}).get("roomRates", {}) if data is not None else None
+            results.append(evaluate(rooms, cin, cout, state))
+
+        browser.close()
+    write_dashboard(results)
 
 
 # ----------------------------------------------------------------------------
@@ -162,13 +174,13 @@ def write_dashboard(results):
     rows = ""
     any_open = False
     for r in sorted(results, key=lambda x: x["checkin"]):
-        if r["status"].startswith("OPEN"):       # 50 is bookable
+        if r["status"].startswith("OPEN"):
             any_open = True
             cell = (f'<a href="{html.escape(r["url"])}" '
                     f'style="color:#1a7f37;font-weight:700">{html.escape(r["status"])} &rarr; book</a>')
         else:
             color = ("#8c5800" if r["status"] == "sold out"
-                     else "#cf222e" if r["status"] == "error" else "#57606a")
+                     else "#cf222e" if r["status"] in ("error", "no data") else "#57606a")
             extra = f' ({r.get("total", 0)} other sites)' if r["status"] == "no 50" else ""
             cell = f'<span style="color:{color}">{html.escape(r["status"] + extra)}</span>'
         rows += (f'<tr><td>{r["checkin"]} &rarr; {r["checkout"]}</td>'
@@ -182,24 +194,17 @@ def write_dashboard(results):
 <body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:620px;
 margin:40px auto;padding:0 16px;color:#1f2328">
 <h1 style="margin-bottom:4px">Ventana Camp Watcher</h1>
-<p style="color:#57606a;margin-top:0">Sites 49 &amp; 50 &middot; last checked {now}</p>
+<p style="color:#57606a;margin-top:0">Site 50 (49 = bonus) &middot; last checked {now}</p>
 <p style="font-size:18px;font-weight:600">{banner}</p>
 <table style="width:100%;border-collapse:collapse;font-size:15px">
 <thead><tr style="border-bottom:2px solid #d0d7de;text-align:left">
 <th style="padding:8px 0">Weekend</th><th style="padding:8px 0;text-align:right">Status</th></tr></thead>
 <tbody>{rows}</tbody></table>
 <p style="color:#8c959f;font-size:12px;margin-top:24px">
-Auto-generated by ventana_monitor.py (8am / 6pm). You also get a Pushover alert the
-moment a site opens.</p>
+Auto-generated by ventana_monitor.py (8am / 6pm). Pushover alerts you the moment site 50 opens.</p>
 </body></html>"""
     DASHBOARD_FILE.write_text(doc)
     print(f"   dashboard -> {DASHBOARD_FILE}")
-
-
-def run_once():
-    state = load_state()
-    results = [check_range(c, o, state) for c, o in DATE_RANGES]
-    write_dashboard(results)
 
 
 def main():
